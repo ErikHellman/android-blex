@@ -4,10 +4,12 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 
 @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
 internal class GattCallbackLegacy : GattCallback() {
+    override val events: Flow<GattEvent> = MutableSharedFlow()
     private val mutableEvents = events as MutableSharedFlow<GattEvent>
 
     override fun onPhyUpdate(gatt: BluetoothGatt?, txPhy: Int, rxPhy: Int, status: Int) {

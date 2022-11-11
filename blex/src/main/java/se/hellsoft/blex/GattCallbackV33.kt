@@ -3,9 +3,11 @@ package se.hellsoft.blex
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 
 internal class GattCallbackV33 : GattCallback() {
+    override val events: Flow<GattEvent> = MutableSharedFlow()
     private val mutableEvents = events as MutableSharedFlow<GattEvent>
 
     override fun onPhyUpdate(gatt: BluetoothGatt?, txPhy: Int, rxPhy: Int, status: Int) {
@@ -17,8 +19,7 @@ internal class GattCallbackV33 : GattCallback() {
     }
 
     override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-        val event = ConnectionChanged(status, ConnectionState.fromState(newState))
-        mutableEvents.tryEmit(event)
+        mutableEvents.tryEmit(ConnectionChanged(status, ConnectionState.fromState(newState)))
     }
 
     override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {

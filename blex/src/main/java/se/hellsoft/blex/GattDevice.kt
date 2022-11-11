@@ -17,7 +17,11 @@ import java.util.*
 const val DEFAULT_GATT_TIMEOUT = 5000L
 
 @Suppress("DEPRECATION")
-class GattDevice(private val bluetoothDevice: BluetoothDevice) {
+class GattDevice(
+    private val bluetoothDevice: BluetoothDevice,
+    private val callback: GattCallback = createCallback(),
+    private val logger: ((level: Int, message: String, throwable: Throwable?) -> Unit)? = null
+) {
     companion object {
         /**
          * The UUID for the standard Client Characteristic Configuration.
@@ -26,7 +30,7 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
         val ClientCharacteristicConfigurationID: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-        private fun createCallback(): GattCallback {
+        fun createCallback(): GattCallback {
             return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                 GattCallbackLegacy()
             } else {
@@ -36,7 +40,6 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
     }
 
     private val mutex = Mutex()
-    private val callback = createCallback()
     private var bluetoothGatt: BluetoothGatt? = null
 
     val events = callback.events
@@ -48,8 +51,8 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
         context: Context,
         autoConnect: Boolean = true,
         transport: Int = BluetoothDevice.TRANSPORT_LE,
-        phy: Int = BluetoothDevice.PHY_LE_1M
-    ): ConnectionChanged {
+        phy: Int = BluetoothDevice.PHY_LE_1M,
+    ): Flow<ConnectionChanged> {
         return callback.events
             .onStart {
                 bluetoothGatt?.let {
@@ -65,9 +68,7 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
                     )
                 }
             }
-            .filterIsInstance<ConnectionChanged>()
-            .firstOrNull()
-            ?: ConnectionChanged(BluetoothGatt.GATT_FAILURE, ConnectionState.Disconnected)
+            .filterIsInstance()
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
@@ -345,25 +346,24 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
         }
     }
 
-}
-
-private suspend fun <T> Mutex.queueWithTimeout(
-    action: String,
-    timeout: Long = DEFAULT_GATT_TIMEOUT,
-    block: suspend CoroutineScope.() -> T
-): T {
-    return try {
-        Log.d("BLEx", "try: $action")
-        withLock {
-            return@withLock withTimeout(timeMillis = timeout, block = block)
+    private suspend fun <T> Mutex.queueWithTimeout(
+        action: String,
+        timeout: Long = DEFAULT_GATT_TIMEOUT,
+        block: suspend CoroutineScope.() -> T
+    ): T {
+        return try {
+            logger?.invoke(Log.DEBUG, "try: $action", null)
+            withLock {
+                return@withLock withTimeout(timeMillis = timeout, block = block)
+            }
+        } catch (e: Exception) {
+            logger?.invoke(Log.ERROR, "error: $action", null)
+            throw e
         }
-    } catch (e: Exception) {
-        Log.e("BLEx", "error: $action", e)
-        throw e
     }
 }
 
 abstract class GattCallback : BluetoothGattCallback() {
-    val events: Flow<GattEvent> = MutableSharedFlow()
+    abstract val events: Flow<GattEvent>
 }
 
