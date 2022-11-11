@@ -100,9 +100,9 @@ internal class GattCallbackLegacy : GattCallback() {
         )
     }
 
-    override fun onReliableWriteCompleted(gatt: BluetoothGatt?, status: Int) {
-        mutableEvents.tryEmit(ReliableWriteCompleted(status))
-    }
+//    override fun onReliableWriteCompleted(gatt: BluetoothGatt?, status: Int) {
+//        mutableEvents.tryEmit(ReliableWriteCompleted(status))
+//    }
 
     override fun onReadRemoteRssi(gatt: BluetoothGatt?, rssi: Int, status: Int) {
         mutableEvents.tryEmit(ReadRemoteRssi(rssi, status))

@@ -81,7 +81,7 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
             ?.getCharacteristic(characteristic)
         val targetDesc = targetChar
             ?.getDescriptor(descriptor)
-        return if (targetDesc != null) {
+        return (if (targetDesc != null) {
             bluetoothGatt?.setCharacteristicNotification(targetChar, enable)
             mutex.queueWithTimeout("updateNotifications: $service $characteristic $descriptor $enable") {
                 callback.events
@@ -104,7 +104,7 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
             }
         } else {
             DescriptorWritten(service, characteristic, descriptor, BluetoothGatt.GATT_FAILURE)
-        }?.status == BluetoothGatt.GATT_SUCCESS
+        }).status == BluetoothGatt.GATT_SUCCESS
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
@@ -299,7 +299,7 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
-    suspend fun readREmoteRssi(txPhy: Int, rxPhy: Int, phyOptions: Int): ReadRemoteRssi {
+    suspend fun readRemoteRssi(): ReadRemoteRssi {
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("readRemoteRssi") {
                 callback.events
