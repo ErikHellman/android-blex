@@ -41,17 +41,26 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
 
     val events = callback.events
 
+    val services = bluetoothGatt?.services ?: emptyList()
+
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
-    suspend fun connect(context: Context): ConnectionChanged {
+    suspend fun connect(
+        context: Context,
+        autoConnect: Boolean = true,
+        transport: Int = BluetoothDevice.TRANSPORT_LE,
+        phy: Int = BluetoothDevice.PHY_LE_1M
+    ): ConnectionChanged {
         return callback.events
             .onStart {
                 bluetoothGatt?.let {
                     bluetoothGatt?.connect()
                 } ?: run {
                     bluetoothGatt = bluetoothDevice.connectGatt(
-                        context, true, callback,
-                        BluetoothDevice.TRANSPORT_LE,
-                        BluetoothDevice.PHY_LE_1M, // Note: this have no effect when autoConnect is true
+                        context,
+                        autoConnect,
+                        callback,
+                        transport,
+                        phy, // Note: this have no effect when autoConnect is true
                         null
                     )
                 }
