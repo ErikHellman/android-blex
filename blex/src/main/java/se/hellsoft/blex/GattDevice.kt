@@ -42,17 +42,23 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
     val events = callback.events
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
-    suspend fun connect(context: Context): Flow<ConnectionChanged> {
+    suspend fun connect(context: Context): ConnectionChanged {
         return callback.events
             .onStart {
-                bluetoothGatt = bluetoothDevice.connectGatt(
-                    context, true, callback,
-                    BluetoothDevice.TRANSPORT_LE,
-                    BluetoothDevice.PHY_LE_1M, // Note: this have no effect when autoConnect is true
-                    null
-                )
+                bluetoothGatt?.let {
+                    bluetoothGatt?.connect()
+                } ?: run {
+                    bluetoothGatt = bluetoothDevice.connectGatt(
+                        context, true, callback,
+                        BluetoothDevice.TRANSPORT_LE,
+                        BluetoothDevice.PHY_LE_1M, // Note: this have no effect when autoConnect is true
+                        null
+                    )
+                }
             }
-            .filterIsInstance()
+            .filterIsInstance<ConnectionChanged>()
+            .firstOrNull()
+            ?: ConnectionChanged(BluetoothGatt.GATT_FAILURE, ConnectionState.Disconnected)
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
@@ -309,6 +315,27 @@ class GattDevice(private val bluetoothDevice: BluetoothDevice) {
             }
         } ?: ReadRemoteRssi(0, BluetoothGatt.GATT_FAILURE)
     }
+
+    @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
+    suspend fun disconnect(): ConnectionChanged {
+        return mutex.queueWithTimeout("close") {
+            callback.events
+                .onStart {
+                    bluetoothGatt?.disconnect()
+                }
+                .filterIsInstance<ConnectionChanged>()
+                .firstOrNull()
+        } ?: ConnectionChanged(BluetoothGatt.GATT_FAILURE, ConnectionState.Disconnected)
+    }
+
+    @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
+    suspend fun close() {
+        mutex.queueWithTimeout("close") {
+            bluetoothGatt?.close()
+            bluetoothGatt = null
+        }
+    }
+
 }
 
 private suspend fun <T> Mutex.queueWithTimeout(
