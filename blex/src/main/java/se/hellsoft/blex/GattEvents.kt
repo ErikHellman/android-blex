@@ -1,7 +1,7 @@
 package se.hellsoft.blex
 
 import android.bluetooth.BluetoothProfile
-import java.util.*
+import java.util.UUID
 
 enum class ConnectionState(val state: Int) {
     Connected(BluetoothProfile.STATE_CONNECTED),
@@ -32,8 +32,7 @@ data class ConnectionChanged(
 data class ServicesDiscovered(val status: Int) : GattEvent()
 
 data class CharacteristicChanged(
-    val service: UUID,
-    val characteristic: UUID,
+    val characteristics: GattCharacteristic,
     val value: ByteArray
 ) : GattEvent() {
     override fun equals(other: Any?): Boolean {
@@ -42,24 +41,21 @@ data class CharacteristicChanged(
 
         other as CharacteristicChanged
 
-        if (service != other.service) return false
-        if (characteristic != other.characteristic) return false
+        if (characteristics != other.characteristics) return false
         if (!value.contentEquals(other.value)) return false
 
         return true
     }
 
     override fun hashCode(): Int {
-        var result = service.hashCode()
-        result = 31 * result + characteristic.hashCode()
+        var result = characteristics.hashCode()
         result = 31 * result + value.contentHashCode()
         return result
     }
 }
 
 data class CharacteristicRead(
-    val service: UUID,
-    val characteristic: UUID,
+    val characteristic: GattCharacteristic,
     val value: ByteArray,
     val status: Int
 ) : GattEvent() {
@@ -69,31 +65,29 @@ data class CharacteristicRead(
 
         other as CharacteristicRead
 
-        if (service != other.service) return false
         if (characteristic != other.characteristic) return false
         if (!value.contentEquals(other.value)) return false
+        if (status != other.status) return false
 
         return true
     }
 
     override fun hashCode(): Int {
-        var result = service.hashCode()
-        result = 31 * result + characteristic.hashCode()
+        var result = characteristic.hashCode()
         result = 31 * result + value.contentHashCode()
+        result = 31 * result + status
         return result
     }
 }
 
 data class CharacteristicWritten(
-    val service: UUID,
-    val characteristic: UUID,
+    val characteristic: GattCharacteristic,
     val status: Int
 ) : GattEvent()
 
 data class DescriptorRead(
-    val service: UUID,
-    val characteristic: UUID,
-    val descriptor: UUID,
+    val characteristic: GattCharacteristic,
+    val descriptor: GattDescriptor,
     val value: ByteArray,
     val status: Int
 ) : GattEvent() {
@@ -103,8 +97,6 @@ data class DescriptorRead(
 
         other as DescriptorRead
 
-        if (service != other.service) return false
-        if (characteristic != other.characteristic) return false
         if (descriptor != other.descriptor) return false
         if (!value.contentEquals(other.value)) return false
         if (status != other.status) return false
@@ -113,9 +105,7 @@ data class DescriptorRead(
     }
 
     override fun hashCode(): Int {
-        var result = service.hashCode()
-        result = 31 * result + characteristic.hashCode()
-        result = 31 * result + descriptor.hashCode()
+        var result = descriptor.hashCode()
         result = 31 * result + value.contentHashCode()
         result = 31 * result + status
         return result
@@ -123,9 +113,8 @@ data class DescriptorRead(
 }
 
 data class DescriptorWritten(
-    val service: UUID,
-    val characteristic: UUID,
-    val descriptor: UUID,
+    val characteristic: GattCharacteristic,
+    val descriptorId: UUID,
     val status: Int
 ) : GattEvent()
 
@@ -133,7 +122,5 @@ data class MtuChanged(val mtu: Int, val status: Int) : GattEvent()
 data class PhyRead(val txPhy: Int, val rxPhy: Int, val status: Int) : GattEvent()
 data class PhyUpdate(val txPhy: Int, val rxPhy: Int, val status: Int) : GattEvent()
 data class ReadRemoteRssi(val rssi: Int, val status: Int) : GattEvent()
-// TODO Figure out how to implement this...
-//data class ReliableWriteCompleted(val status: Int) : GattEvent()
+data class ReliableWriteCompleted(val status: Int) : GattEvent()
 object ServiceChanged : GattEvent()
-

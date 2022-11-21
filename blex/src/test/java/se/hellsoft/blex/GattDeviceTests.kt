@@ -3,6 +3,7 @@ package se.hellsoft.blex
 import android.bluetooth.BluetoothGatt
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -38,8 +39,11 @@ class GattDeviceTests {
         val services = listOf(UUID.randomUUID() to characteristics)
         val eventFlow = MutableSharedFlow<GattEvent>()
             .onSubscription {
+                delay(1000)
                 emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connecting))
+                delay(100)
                 emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connected))
+                delay(1000)
                 emit(CharacteristicWritten(services[0].first, characteristics[0].first, BluetoothGatt.GATT_SUCCESS))
             }
         val gattDevice = GattDevice(mockDevice("abc123", services), TestingCallbacks(eventFlow))

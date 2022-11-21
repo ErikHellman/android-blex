@@ -2,6 +2,7 @@ package se.hellsoft.blex
 
 import android.Manifest.permission.BLUETOOTH
 import android.Manifest.permission.BLUETOOTH_CONNECT
+import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
 import android.os.Build
@@ -16,43 +17,55 @@ import java.util.*
 
 const val DEFAULT_GATT_TIMEOUT = 5000L
 
-@Suppress("DEPRECATION")
+/**
+ * The wrapper for the system BluetoothGattDevice, which provides a safer API for performing GATT
+ * operations.
+ *
+ * All operations are queued and the suspending functions will
+ */
+@Suppress("DEPRECATION", "unused", "MemberVisibilityCanBePrivate")
+@SuppressLint("InlinedApi")
 class GattDevice(
-    private val bluetoothDevice: BluetoothDevice,
-    private val callback: GattCallback = createCallback(),
-    private val logger: ((level: Int, message: String, throwable: Throwable?) -> Unit)? = null
+    val bluetoothDevice: BluetoothDevice,
+    bufferCapacity: Int = DEFAULT_EVENT_BUFFER_CAPACITY,
+    private val logger: ((level: Int, message: String, throwable: Throwable?) -> Unit)? = null,
 ) {
     companion object {
+        /**
+         * The default capacity for the events Flow.
+         */
+        const val DEFAULT_EVENT_BUFFER_CAPACITY = 10
+
         /**
          * The UUID for the standard Client Characteristic Configuration.
          * This is usually used to enable/disable notifications on a characteristic.
          */
         val ClientCharacteristicConfigurationID: UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-        fun createCallback(): GattCallback {
-            return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                GattCallbackLegacy()
-            } else {
-                GattCallbackV33()
-            }
-        }
     }
 
+    private var closed = false
+    private val callback =
+        GattCallback(bufferCapacity) { gatt -> services = gatt.services.map { GattService(it) } }
     private val mutex = Mutex()
     private var bluetoothGatt: BluetoothGatt? = null
 
     val events = callback.events
 
-    val services = bluetoothGatt?.services ?: emptyList()
+    val connectionState: Flow<ConnectionChanged> = callback.events.filterIsInstance()
+
+    var services: List<GattService> = emptyList()
+        internal set
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
-    suspend fun connect(
+    fun connect(
         context: Context,
         autoConnect: Boolean = true,
         transport: Int = BluetoothDevice.TRANSPORT_LE,
         phy: Int = BluetoothDevice.PHY_LE_1M,
     ): Flow<ConnectionChanged> {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
+
         return callback.events
             .onStart {
                 bluetoothGatt?.let {
@@ -73,6 +86,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun discoverServices(): ServicesDiscovered {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("discoverServices") {
                 callback.events
@@ -85,21 +99,21 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     private suspend fun updateNotifications(
-        service: UUID,
-        characteristic: UUID,
+        characteristic: GattCharacteristic,
         descriptor: UUID,
         enable: Boolean
     ): Boolean {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         val value =
             if (enable) BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE else BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-        val targetChar = bluetoothGatt
-            ?.getService(service)
-            ?.getCharacteristic(characteristic)
-        val targetDesc = targetChar
-            ?.getDescriptor(descriptor)
+        val targetDesc =
+            characteristic.descriptors.find { it.id == descriptor }?.bluetoothGattDescriptor
         return (if (targetDesc != null) {
-            bluetoothGatt?.setCharacteristicNotification(targetChar, enable)
-            mutex.queueWithTimeout("updateNotifications: $service $characteristic $descriptor $enable") {
+            bluetoothGatt?.setCharacteristicNotification(
+                characteristic.bluetoothGattCharacteristic,
+                enable
+            )
+            mutex.queueWithTimeout("updateNotifications: $characteristic $descriptor $enable") {
                 callback.events
                     .onStart {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -112,157 +126,146 @@ class GattDevice(
                     .filterIsInstance<DescriptorWritten>()
                     .firstOrNull()
                     ?: DescriptorWritten(
-                        service,
                         characteristic,
                         descriptor,
                         BluetoothGatt.GATT_FAILURE
                     )
             }
         } else {
-            DescriptorWritten(service, characteristic, descriptor, BluetoothGatt.GATT_FAILURE)
+            DescriptorWritten(characteristic, descriptor, BluetoothGatt.GATT_FAILURE)
         }).status == BluetoothGatt.GATT_SUCCESS
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun registerNotifications(
-        service: UUID,
-        characteristic: UUID,
+        characteristic: GattCharacteristic,
         descriptor: UUID = ClientCharacteristicConfigurationID
-    ): Boolean = updateNotifications(service, characteristic, descriptor, true)
+    ): Boolean {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
+        return updateNotifications(characteristic, descriptor, true)
+    }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun unregisterNotifications(
-        service: UUID,
-        characteristic: UUID,
+        characteristic: GattCharacteristic,
         descriptor: UUID = ClientCharacteristicConfigurationID
-    ): Boolean = updateNotifications(service, characteristic, descriptor, false)
+    ): Boolean {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
+        return updateNotifications(characteristic, descriptor, false)
+    }
 
+
+    /**
+     * Write a new value to the specified GATT characteristic.
+     *
+     * @param characteristic The target for the write operations
+     * @param value The value to write to the characteristic
+     * @param writeType The type of write operation
+     * @return The result of the write operation
+     */
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun writeCharacteristic(
-        service: UUID,
-        characteristic: UUID, value: ByteArray,
+        characteristic: GattCharacteristic,
+        value: ByteArray,
+        writeType: Int = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
     ): CharacteristicWritten {
-        val targetChar = bluetoothGatt?.getService(service)?.getCharacteristic(characteristic)
-            ?: return CharacteristicWritten(service, characteristic, BluetoothGatt.GATT_FAILURE)
-
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
-            mutex.queueWithTimeout("writeCharacteristic $service $characteristic ${value.size} bytes") {
+            mutex.queueWithTimeout("writeCharacteristic $characteristic ${value.size} bytes") {
                 callback.events
                     .onStart {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             it.writeCharacteristic(
-                                targetChar,
+                                characteristic.bluetoothGattCharacteristic,
                                 value,
-                                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                                writeType
                             )
                         } else {
-                            targetChar.value = value
-                            it.writeCharacteristic(targetChar)
+                            characteristic.bluetoothGattCharacteristic.writeType = writeType
+                            characteristic.bluetoothGattCharacteristic.value = value
+                            it.writeCharacteristic(characteristic.bluetoothGattCharacteristic)
                         }
                     }
                     .filterIsInstance<CharacteristicWritten>()
-                    .firstOrNull { it.service == service && it.characteristic == characteristic }
-                    ?: CharacteristicWritten(service, characteristic, BluetoothGatt.GATT_FAILURE)
+                    .firstOrNull { it.characteristic.instanceId == characteristic.instanceId }
+                    ?: CharacteristicWritten(characteristic, BluetoothGatt.GATT_FAILURE)
             }
-        } ?: CharacteristicWritten(service, characteristic, BluetoothGatt.GATT_FAILURE)
+        } ?: CharacteristicWritten(characteristic, BluetoothGatt.GATT_FAILURE)
     }
 
+    /**
+     * Read from, a characteristic.
+     *
+     * @param characteristic The characteristic to read from
+     * @return The result of the read operation, including the value read if successful.
+     */
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
-    suspend fun readCharacteristic(
-        service: UUID,
-        characteristic: UUID
-    ): CharacteristicRead {
-        val targetChar = bluetoothGatt?.getService(service)?.getCharacteristic(characteristic)
-            ?: return CharacteristicRead(
-                service,
-                characteristic,
-                ByteArray(0),
-                BluetoothGatt.GATT_FAILURE
-            )
-
+    suspend fun readCharacteristic(characteristic: GattCharacteristic): CharacteristicRead {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
-            mutex.queueWithTimeout("readCharacteristic $service $characteristic") {
+            mutex.queueWithTimeout("readCharacteristic $characteristic") {
                 callback.events
                     .onStart {
-                        it.readCharacteristic(targetChar)
+                        it.readCharacteristic(characteristic.bluetoothGattCharacteristic)
                     }
                     .filterIsInstance<CharacteristicRead>()
-                    .firstOrNull { it.service == service && it.characteristic == characteristic }
+                    .firstOrNull { it.characteristic.instanceId == characteristic.instanceId }
                     ?: CharacteristicRead(
-                        service,
                         characteristic,
                         ByteArray(0),
                         BluetoothGatt.GATT_FAILURE
                     )
             }
-        } ?: CharacteristicRead(service, characteristic, ByteArray(0), BluetoothGatt.GATT_FAILURE)
+        } ?: CharacteristicRead(characteristic, ByteArray(0), BluetoothGatt.GATT_FAILURE)
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun writeDescriptor(
-        service: UUID,
-        characteristic: UUID,
-        descriptor: UUID,
+        characteristic: GattCharacteristic,
+        descriptor: GattDescriptor,
         value: ByteArray
     ): DescriptorWritten {
-        val targetChar = bluetoothGatt?.getService(service)?.getCharacteristic(characteristic)
-        val targetDesc = targetChar?.getDescriptor(descriptor) ?: return DescriptorWritten(
-            service,
-            characteristic,
-            descriptor,
-            BluetoothGatt.GATT_FAILURE
-        )
-
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
-            mutex.queueWithTimeout("writeDescriptor $service $characteristic $descriptor ${value.size}") {
+            mutex.queueWithTimeout("writeDescriptor $descriptor ${value.size}") {
                 callback.events
                     .onStart {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            it.writeDescriptor(targetDesc, value)
+                            it.writeDescriptor(descriptor.bluetoothGattDescriptor, value)
                         } else {
-                            targetDesc.value = value
-                            it.writeDescriptor(targetDesc)
+                            descriptor.bluetoothGattDescriptor.value = value
+                            it.writeDescriptor(descriptor.bluetoothGattDescriptor)
                         }
                     }
                     .filterIsInstance<DescriptorWritten>()
                     .firstOrNull {
-                        it.service == service && it.characteristic == characteristic && it.descriptor == descriptor
+                        it.descriptorId == descriptor.id
                     } ?: DescriptorWritten(
-                    service,
                     characteristic,
-                    descriptor,
+                    descriptor.id,
                     BluetoothGatt.GATT_FAILURE
                 )
             }
-        } ?: DescriptorWritten(service, characteristic, descriptor, BluetoothGatt.GATT_FAILURE)
+        } ?: DescriptorWritten(characteristic, descriptor.id, BluetoothGatt.GATT_FAILURE)
     }
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun readDescriptor(
-        service: UUID,
-        characteristic: UUID,
-        descriptor: UUID,
+        characteristic: GattCharacteristic,
+        descriptor: GattDescriptor,
     ): DescriptorRead {
-        val targetChar = bluetoothGatt?.getService(service)?.getCharacteristic(characteristic)
-        val targetDesc = targetChar?.getDescriptor(descriptor) ?: return DescriptorRead(
-            service,
-            characteristic,
-            descriptor,
-            ByteArray(0),
-            BluetoothGatt.GATT_FAILURE
-        )
-
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
-            mutex.queueWithTimeout("readDescriptor $service $characteristic $descriptor") {
+            mutex.queueWithTimeout("readDescriptor $characteristic $descriptor") {
                 callback.events
                     .onStart {
-                        it.readDescriptor(targetDesc)
+                        it.readDescriptor(descriptor.bluetoothGattDescriptor)
                     }
                     .filterIsInstance<DescriptorRead>()
                     .firstOrNull {
-                        it.service == service && it.characteristic == characteristic && it.descriptor == descriptor
+                        it.descriptor.id == descriptor.id &&
+                                it.characteristic.instanceId == characteristic.instanceId
                     } ?: DescriptorRead(
-                    service,
                     characteristic,
                     descriptor,
                     ByteArray(0),
@@ -270,7 +273,6 @@ class GattDevice(
                 )
             }
         } ?: DescriptorRead(
-            service,
             characteristic,
             descriptor,
             ByteArray(0),
@@ -280,6 +282,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun readMtu(mtu: Int): MtuChanged {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("requestMtu $mtu") {
                 callback.events
@@ -292,6 +295,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun readPhy(): PhyRead {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("readPhy") {
                 callback.events
@@ -304,6 +308,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun setPreferredPhy(txPhy: Int, rxPhy: Int, phyOptions: Int): PhyUpdate {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("setPreferredPhy $txPhy $rxPhy $phyOptions") {
                 callback.events
@@ -316,6 +321,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun readRemoteRssi(): ReadRemoteRssi {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return bluetoothGatt?.let {
             mutex.queueWithTimeout("readRemoteRssi") {
                 callback.events
@@ -328,6 +334,7 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun disconnect(): ConnectionChanged {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
         return mutex.queueWithTimeout("close") {
             callback.events
                 .onStart {
@@ -340,7 +347,10 @@ class GattDevice(
 
     @RequiresPermission(anyOf = [BLUETOOTH, BLUETOOTH_CONNECT])
     suspend fun close() {
+        if (closed) throw IllegalStateException("GattDevice is closed!")
+        closed = true
         mutex.queueWithTimeout("close") {
+            services = emptyList()
             bluetoothGatt?.close()
             bluetoothGatt = null
         }
@@ -361,9 +371,5 @@ class GattDevice(
             throw e
         }
     }
-}
-
-abstract class GattCallback : BluetoothGattCallback() {
-    abstract val events: Flow<GattEvent>
 }
 
