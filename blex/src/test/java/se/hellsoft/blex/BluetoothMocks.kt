@@ -24,8 +24,7 @@ fun mockDevice(hwAddress: String, gattServices: GattServices): BluetoothDevice {
             val char = characteristicSlot.captured
             (callbackSlot.captured.events as MutableSharedFlow<GattEvent>).tryEmit(
                 CharacteristicRead(
-                    char.service.uuid,
-                    char.uuid,
+                    GattCharacteristic(char),
                     ByteArray(20),
                     BluetoothGatt.GATT_SUCCESS
                 )
