@@ -15,51 +15,5 @@ import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GattDeviceTests {
-    @Test
-    fun `Connect GattDevice emits ConnectionChanged`() = runTest(StandardTestDispatcher()) {
-        val descriptors = listOf(GattDevice.ClientCharacteristicConfigurationID)
-        val characteristics = listOf(UUID.randomUUID() to descriptors)
-        val services = listOf(UUID.randomUUID() to characteristics)
-        val eventFlow = MutableSharedFlow<GattEvent>()
-            .onSubscription {
-                emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connecting))
-                emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connected))
-            }
-        val gattDevice = GattDevice(mockDevice("abc123", services), TestingCallbacks(eventFlow))
-        val result = gattDevice.connect(mockk(relaxed = true))
-        val (connecting, connected) = result.take(2).toList()
-        assertEquals(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connecting), connecting)
-        assertEquals(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connected), connected)
-    }
 
-    @Test
-    fun `Write to characteristic emits CharacteristicWritten`() = runTest(StandardTestDispatcher()) {
-        val descriptors = listOf(GattDevice.ClientCharacteristicConfigurationID)
-        val characteristics = listOf(UUID.randomUUID() to descriptors)
-        val services = listOf(UUID.randomUUID() to characteristics)
-        val eventFlow = MutableSharedFlow<GattEvent>()
-            .onSubscription {
-                delay(1000)
-                emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connecting))
-                delay(100)
-                emit(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connected))
-                delay(1000)
-                emit(CharacteristicWritten(services[0].first, characteristics[0].first, BluetoothGatt.GATT_SUCCESS))
-            }
-        val gattDevice = GattDevice(mockDevice("abc123", services), TestingCallbacks(eventFlow))
-
-        val connectResult = gattDevice.connect(mockk(relaxed = true))
-        val (connecting, connected) = connectResult.take(2).toList()
-        assertEquals(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connecting), connecting)
-        assertEquals(ConnectionChanged(BluetoothGatt.GATT_SUCCESS, ConnectionState.Connected), connected)
-
-        val result = gattDevice.writeCharacteristic(services[0].first, characteristics[0].first, ByteArray(5))
-        assertEquals(CharacteristicWritten(services[0].first, characteristics[0].first, BluetoothGatt.GATT_SUCCESS), result)
-    }
-
-
-}
-
-class TestingCallbacks(eventFlow: Flow<GattEvent>) : GattCallback() {
-    override val events: Flow<GattEvent> = eventFlow
 }
